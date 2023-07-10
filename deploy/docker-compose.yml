@@ -1,0 +1,105 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: ./deploy/Dockerfile
+      target: prod
+    image: fastf:${FASTF_VERSION:-latest}
+    restart: always
+    env_file:
+    - .env
+    labels:
+      # Enables traefik for this container.
+    - traefik.enable=true
+    - traefik.http.routers.fastf.rule=Host(`${FASTF_TRAEFIK_HOST:-fastf.localhost}`)
+    - traefik.http.routers.fastf.entrypoints=http
+    - traefik.http.routers.fastf.service=fastf
+    - traefik.http.services.fastf.loadbalancer.server.port=${FASTF_PORT:-8000}
+    networks:
+    - default
+    - traefik-shared
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rmq:
+        condition: service_healthy
+    environment:
+      FASTF_HOST: 0.0.0.0
+      FASTF_DB_HOST: fastf-db
+      FASTF_DB_PORT: 5432
+      FASTF_DB_USER: fastf
+      FASTF_DB_PASS: fastf
+      FASTF_DB_BASE: fastf
+      FASTF_RABBIT_HOST: fastf-rmq
+      FASTF_REDIS_HOST: fastf-redis
+
+  db:
+    image: postgres:13.8-bullseye
+    hostname: fastf-db
+    environment:
+      POSTGRES_PASSWORD: "fastf"
+      POSTGRES_USER: "fastf"
+      POSTGRES_DB: "fastf"
+    volumes:
+    - fastf-db-data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: pg_isready -U fastf
+      interval: 2s
+      timeout: 3s
+      retries: 40
+
+  migrator:
+    image: fastf:${FASTF_VERSION:-latest}
+    restart: "no"
+    command: alembic upgrade head
+    environment:
+      FASTF_DB_HOST: fastf-db
+      FASTF_DB_PORT: 5432
+      FASTF_DB_USER: fastf
+      FASTF_DB_PASS: fastf
+      FASTF_DB_BASE: fastf
+    depends_on:
+      db:
+        condition: service_healthy
+
+  redis:
+    image: bitnami/redis:6.2.5
+    hostname: "fastf-redis"
+    restart: always
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+    healthcheck:
+      test: redis-cli ping
+      interval: 1s
+      timeout: 3s
+      retries: 50
+
+  rmq:
+    image: rabbitmq:3.9.16-alpine
+    hostname: "fastf-rmq"
+    restart: always
+    environment:
+      RABBITMQ_DEFAULT_USER: "guest"
+      RABBITMQ_DEFAULT_PASS: "guest"
+      RABBITMQ_DEFAULT_VHOST: "/"
+    healthcheck:
+      test: rabbitmq-diagnostics check_running -q
+      interval: 3s
+      timeout: 3s
+      retries: 50
+
+
+
+volumes:
+  fastf-db-data:
+    name: fastf-db-data
+
+networks:
+  # Network for traefik.
+  traefik-shared:
+    name: traefik-shared
